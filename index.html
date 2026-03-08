@@ -856,7 +856,7 @@ function FirebaseApp() {
   const [syncing, setSyncing] = React.useState(false);
 
   useEffect(() => {
-    const unsub = db.collection("zakazky").orderBy("createdAt", "asc").onSnapshot(snapshot => {
+    const unsub = db.collection("zakazky").onSnapshot(snapshot => {
       const data = snapshot.docs.map(doc => ({ ...doc.data(), _docId: doc.id }));
       setFbZakazky(data);
       // Po příchodu snapshotu vymaž override pro ty záznamy které přišly
