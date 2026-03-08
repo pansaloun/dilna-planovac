@@ -491,7 +491,7 @@ function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, 
     return zakazky.map((z, zi) => {
       const rowY = zi * ROW_H;
       return (
-        <div className="gantt-row" key={z.id} data-id={z.id}>
+        <div className="gantt-row" key={z._docId||z.id} data-id={z.id}>
           <div className="gantt-row-label" onClick={() => onEditZakazka(z)}>
             <div className="gantt-row-id">{z.id}</div>
             <div className="gantt-row-name">{z.name}</div>
@@ -583,7 +583,7 @@ function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, 
 
       return (
         <line
-          key={z.id}
+          key={z._docId||z.id}
           x1={LABEL_W + ingEndPx} y1={ingRowY}
           x2={LABEL_W + vypStartPx} y2={vypRowY}
           stroke={color} strokeWidth="1.5" strokeDasharray="4 3"
@@ -855,7 +855,7 @@ function ZakazkaModal({ zakazka, onSave, onDelete, onClose }) {
         </div>
 
         <div className="modal-footer">
-          {isEdit && <button className="btn btn-danger" onClick={()=>{if(confirm("Smazat zakázku?"))onDelete(zakazka.id);}}>Smazat</button>}
+          {isEdit && <button className="btn btn-danger" onClick={()=>{if(confirm("Smazat zakázku?"))onDelete(zakazka._docId);}}>Smazat</button>}
           <button className="btn btn-ghost" onClick={onClose}>Zrušit</button>
           <button className="btn btn-primary" onClick={handleSave} disabled={!form.name || !form.id.trim()}>
             {isEdit ? "Uložit" : "Přidat"}
@@ -888,11 +888,10 @@ function FirebaseApp() {
     setSyncing(false);
   };
 
-  const deleteZakazka = async (zakazkaId) => {
+  const deleteZakazka = async (docId) => {
     setSyncing(true);
     try {
-      const snap = await db.collection("zakazky").where("id", "==", zakazkaId).get();
-      for (const doc of snap.docs) await doc.ref.delete();
+      await db.collection("zakazky").doc(docId).delete();
     } catch(e) { console.error(e); }
     setSyncing(false);
   };
