@@ -353,25 +353,38 @@ function App({ zakazkyOverride, onUpsert, onDelete, onUpdatePhase, syncing }) {
           <div className="tbl-wrap">
             <table>
               <thead>
-                <tr><th>ID</th><th>Název</th><th>Zákazník</th><th>Fáze</th><th>Stav</th><th></th></tr>
+                <tr>
+                  <th>ID</th><th>Název</th><th>Zákazník</th>
+                  <th style={{color:"var(--kon)"}}>NÁVRH</th>
+                  <th style={{color:"var(--kst)"}}>KONSTRUKCE</th>
+                  <th style={{color:"var(--vyr)"}}>VÝROBA</th>
+                  <th style={{color:"var(--mon)"}}>MONTÁŽ</th>
+                  <th>Stav</th><th></th>
+                </tr>
               </thead>
               <tbody>
-                {zakazky.map(z => (
-                  <tr key={z.id} style={{cursor:"pointer"}} onClick={() => setModal({type:"edit",zakazka:z})}>
-                    <td><span className="mono" style={{color:"var(--kst)",fontWeight:700}}>{z.id}</span></td>
-                    <td style={{fontWeight:600}}>{z.name}</td>
-                    <td style={{color:"var(--muted)"}}>{z.customer||"–"}</td>
-                    <td>
-                      <div className="faze-pills">
-                        {ALL_FAZE.map(f => z.phases?.[f.id] ? (
-                          <span key={f.id} className="faze-pill" style={{background:f.color}}>{f.short} {z.phases[f.id].dur}d</span>
-                        ) : null)}
-                      </div>
-                    </td>
-                    <td><span className="badge" style={{background:`${STAV_COLORS[z.stav]}20`,color:STAV_COLORS[z.stav]}}>{z.stav}</span></td>
-                    <td><button className="btn btn-ghost" style={{fontSize:10,padding:"4px 8px"}} onClick={e=>{e.stopPropagation();setModal({type:"edit",zakazka:z});}}>Upravit</button></td>
-                  </tr>
-                ))}
+                {zakazky.map(z => {
+                  const ph = z.phases || {};
+                  const fmtPh = (f) => ph[f] ? (
+                    <div style={{fontSize:10,fontFamily:"IBM Plex Mono,monospace"}}>
+                      <div style={{color:"var(--text)"}}>{ph[f].dur}d</div>
+                      <div style={{color:"var(--muted)",fontSize:9}}>{ph[f].start?.slice(5)}</div>
+                    </div>
+                  ) : <span style={{color:"var(--muted2)"}}>–</span>;
+                  return (
+                    <tr key={z._docId||z.id} style={{cursor:"pointer"}} onClick={() => setModal({type:"edit",zakazka:z})}>
+                      <td><span className="mono" style={{color:"var(--kst)",fontWeight:700}}>{z.id}</span></td>
+                      <td style={{fontWeight:600}}>{z.name}</td>
+                      <td style={{color:"var(--muted)"}}>{z.customer||"–"}</td>
+                      <td>{fmtPh("koncepce")}</td>
+                      <td>{fmtPh("konstrukce")}</td>
+                      <td>{fmtPh("vyroba")}</td>
+                      <td>{fmtPh("montaz")}</td>
+                      <td><span className="badge" style={{background:`${STAV_COLORS[z.stav]}20`,color:STAV_COLORS[z.stav]}}>{z.stav}</span></td>
+                      <td><button className="btn btn-ghost" style={{fontSize:10,padding:"4px 8px"}} onClick={e=>{e.stopPropagation();setModal({type:"edit",zakazka:z});}}>Upravit</button></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
