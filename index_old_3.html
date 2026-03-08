@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dílenský plánovač</title>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script>
+firebase.initializeApp({
+  apiKey: "AIzaSyD4SMhsovKCgjEGnN7eGpiNbFdbw7QHdhc",
+  authDomain: "dilna-planovac.firebaseapp.com",
+  projectId: "dilna-planovac",
+  storageBucket: "dilna-planovac.firebasestorage.app",
+  messagingSenderId: "229997698931",
+  appId: "1:229997698931:web:70ff1a6057f1d154df6f06"
+});
+const db = firebase.firestore();
+</script>
+</head>
+<body style="margin:0;padding:0;background:#0e0f11;">
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+
+// ─── STORAGE ──────────────────────────────────────────────────────────────────
+function loadZakazky() { return []; }
+function saveZakazky(z) {}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+const addDays = (date, days) => { const d = new Date(date); d.setDate(d.getDate() + days); return d; };
+const toISO = (date) => date.toISOString().slice(0, 10);
+const parseDate = (str) => new Date(str + "T00:00:00");
+const formatCZ = (str) => str ? parseDate(str).toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric", year: "numeric" }) : "–";
+const getISOWeek = (date) => {
+  const d = new Date(date); d.setHours(0,0,0,0);
+  d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+  const w1 = new Date(d.getFullYear(), 0, 4);
+  return 1 + Math.round(((d - w1) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7);
+};
+const getMondayOf = (date) => {
+  const d = new Date(date); d.setHours(0,0,0,0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d;
+};
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+const INZENYRINK = [
+  { id: "koncepce",   label: "Návrh",       short: "NÁV", color: "#7c9ef5", group: "ing" },
+  { id: "konstrukce", label: "Konstrukce",  short: "KST", color: "#f0c040", group: "ing" },
+];
+const VYROBA_FAZE = [
+  { id: "vyroba",  label: "Výroba",   short: "VYR", color: "#4af0a0", group: "vyp" },
+  { id: "montaz",  label: "Montáž",   short: "MON", color: "#f07040", group: "vyp" },
+];
+const ALL_FAZE = [...INZENYRINK, ...VYROBA_FAZE];
+
+const STAV_OPTIONS = ["Nová", "Probíhá", "Hotovo", "Pozastaveno"];
+const STAV_COLORS  = { "Nová":"#777788","Probíhá":"#f0c040","Hotovo":"#4af0a0","Pozastaveno":"#f05060" };
+
+const ZOOM_LEVELS = [
+  { label:"4T", weeks:4,  dayPx:20  },
+  { label:"8T", weeks:8,  dayPx:14  },
+  { label:"3M", weeks:12, dayPx:10  },
+  { label:"6M", weeks:24, dayPx:6   },
+  { label:"1R", weeks:52, dayPx:3   },
+];
+const DEFAULT_ZOOM = 2; // index into ZOOM_LEVELS
+const ROW_H   = 48; // px per row
+const LABEL_W = 180; // px for label column
+
+// ─── DEMO DATA ────────────────────────────────────────────────────────────────
+const today = toISO(new Date());
+const t = (offset) => toISO(addDays(new Date(), offset));
+const DEMO_DATA = [
+  { id:"Z-001", name:"Schodiště Brno", customer:"Stavby s.r.o.", stav:"Probíhá", note:"",
+    phases: { koncepce:{start:t(-20),dur:10}, konstrukce:{start:t(-10),dur:15}, vyroba:{start:t(5),dur:20}, montaz:{start:t(25),dur:5} } },
+  { id:"Z-002", name:"Ocelová hala Ostrava", customer:"ProInvest a.s.", stav:"Probíhá", note:"",
+    phases: { koncepce:{start:t(-5),dur:8}, konstrukce:{start:t(3),dur:20}, vyroba:{start:t(23),dur:30}, montaz:{start:t(53),dur:8} } },
+  { id:"Z-003", name:"Zábradlí Praha", customer:"Bytový dům Žižkov", stav:"Nová", note:"",
+    phases: { koncepce:{start:t(5),dur:5}, konstrukce:{start:t(10),dur:8}, vyroba:{start:t(18),dur:12}, montaz:{start:t(30),dur:3} } },
+  { id:"Z-004", name:"CNC pracovní stůl", customer:"Interní", stav:"Nová", note:"",
+    phases: { koncepce:{start:t(10),dur:3}, konstrukce:{start:t(13),dur:5}, vyroba:{start:t(18),dur:10}, montaz:{start:t(28),dur:2} } },
+];
+
+// ─── STYLES ───────────────────────────────────────────────────────────────────
+const S = `
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;user-select:none;}
+:root{
+  --bg:#0e0f11;--s1:#15161a;--s2:#1c1e22;--s3:#23252a;--s4:#2a2d33;
+  --border:#2a2d33;--border2:#363a42;
+  --text:#d8dce6;--muted:#6b7080;--muted2:#454952;
+  --kon:#7c9ef5;--kst:#f0c040;--vyr:#4af0a0;--mon:#f07040;
+  --danger:#f05060;--r:5px;
+}
+body{background:var(--bg);font-family:'IBM Plex Sans',sans-serif;color:var(--text);}
+.app{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+
+/* HEADER */
+.hdr{background:var(--s1);border-bottom:1px solid var(--border);padding:0 20px;height:50px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;gap:12px;}
+.brand{display:flex;align-items:center;gap:9px;}
+.brand-box{width:26px;height:26px;background:var(--kst);display:flex;align-items:center;justify-content:center;border-radius:4px;font-size:13px;flex-shrink:0;}
+.brand-title{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;}
+.brand-sub{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-top:1px;}
+.hdr-right{display:flex;gap:8px;align-items:center;}
+
+/* TABS */
+.tabs{display:flex;gap:0;background:var(--s1);border-bottom:1px solid var(--border);padding:0 20px;flex-shrink:0;}
+.tab{padding:10px 16px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);background:none;border:none;font-family:'IBM Plex Sans',sans-serif;border-bottom:2px solid transparent;transition:all 0.15s;}
+.tab:hover{color:var(--text);}
+.tab.active{color:var(--kst);border-bottom-color:var(--kst);}
+
+/* BUTTONS */
+.btn{display:inline-flex;align-items:center;gap:5px;border:none;border-radius:var(--r);font-family:'IBM Plex Sans',sans-serif;font-weight:600;cursor:pointer;transition:all 0.15s;white-space:nowrap;}
+.btn-primary{background:var(--kst);color:#111;font-size:12px;padding:7px 15px;}
+.btn-primary:hover{opacity:0.85;}
+.btn-ghost{background:var(--s3);color:var(--text);font-size:11px;padding:6px 11px;border:1px solid var(--border);}
+.btn-ghost:hover{border-color:var(--border2);}
+.btn-danger{background:rgba(240,80,96,0.12);color:var(--danger);font-size:11px;padding:6px 11px;border:1px solid rgba(240,80,96,0.2);}
+.btn-danger:hover{background:rgba(240,80,96,0.22);}
+.btn-active{border-color:var(--kst)!important;color:var(--kst)!important;}
+
+/* GANTT LAYOUT */
+.gantt-outer{flex:1;overflow:hidden;display:flex;flex-direction:column;}
+.gantt-toolbar{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--s1);border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;}
+.gantt-toolbar-label{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+.gantt-body{flex:1;overflow:auto;position:relative;}
+
+/* GANTT SECTIONS */
+.gantt-section-hdr{display:flex;align-items:stretch;background:var(--s2);border-bottom:1px solid var(--border2);position:sticky;top:0;z-index:30;}
+.gantt-section-label{width:180px;min-width:180px;padding:6px 12px;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);font-family:'IBM Plex Mono',monospace;border-right:1px solid var(--border);display:flex;align-items:center;gap:6px;}
+.gantt-section-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.gantt-weeks-hdr{display:flex;flex:1;}
+.gantt-week-hdr{min-width:80px;width:80px;padding:5px 4px;text-align:center;font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;border-right:1px solid var(--border);flex-shrink:0;}
+.gantt-week-hdr.today-wk{color:var(--kst);background:rgba(240,192,64,0.06);}
+
+/* GANTT ROWS */
+.gantt-row{display:flex;border-bottom:1px solid var(--border);height:48px;position:relative;}
+.gantt-row:hover .gantt-row-label{background:var(--s3);}
+.gantt-row-label{width:180px;min-width:180px;padding:6px 10px;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;background:var(--s1);cursor:pointer;transition:background 0.1s;position:sticky;left:0;z-index:10;}
+.gantt-row-id{font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--kst);}
+.gantt-row-name{font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.gantt-cells{display:flex;flex:1;position:relative;}
+.gantt-cell{min-width:80px;width:80px;border-right:1px solid var(--border);flex-shrink:0;}
+.gantt-cell.today-wk{background:rgba(240,192,64,0.03);}
+
+/* GANTT BARS */
+.gantt-bar{position:absolute;top:10px;height:28px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#111;overflow:hidden;white-space:nowrap;z-index:5;box-shadow:0 2px 6px rgba(0,0,0,0.3);}
+.gantt-bar.dragging{opacity:0.85;box-shadow:0 4px 16px rgba(0,0,0,0.5);z-index:20;cursor:grabbing!important;}
+.gantt-bar:not(.dragging){cursor:grab;}
+.gantt-bar:not(.dragging):hover{filter:brightness(1.1);}
+
+/* CONNECTOR */
+.gantt-connector{position:absolute;pointer-events:none;z-index:4;}
+
+/* TODAY LINE */
+.today-line{position:absolute;top:0;bottom:0;width:2px;background:rgba(240,192,64,0.5);z-index:15;pointer-events:none;}
+
+/* DIVIDER between sections */
+.gantt-divider{height:4px;background:var(--bg);border-top:1px solid var(--border2);border-bottom:1px solid var(--border2);display:flex;align-items:center;}
+.gantt-divider-label{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--muted2);font-family:'IBM Plex Mono',monospace;padding-left:12px;}
+
+/* PREHLED */
+.content{flex:1;overflow:auto;padding:18px 20px;}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:18px;}
+.stat{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:13px 15px;}
+.stat-lbl{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:4px;font-family:'IBM Plex Mono',monospace;}
+.stat-val{font-size:24px;font-weight:700;font-family:'IBM Plex Mono',monospace;line-height:1;}
+.tbl-wrap{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;}
+table{width:100%;border-collapse:collapse;}
+th{background:var(--s2);padding:9px 12px;text-align:left;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);font-weight:600;font-family:'IBM Plex Mono',monospace;}
+td{padding:10px 12px;font-size:12px;border-bottom:1px solid var(--border);vertical-align:middle;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:var(--s2);}
+.mono{font-family:'IBM Plex Mono',monospace;}
+.badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:3px;font-size:10px;font-weight:700;font-family:'IBM Plex Mono',monospace;}
+.faze-pills{display:flex;gap:3px;flex-wrap:wrap;}
+.faze-pill{font-size:9px;font-family:'IBM Plex Mono',monospace;font-weight:700;padding:2px 6px;border-radius:2px;color:#111;}
+
+/* MODAL */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px;}
+.modal{background:var(--s1);border:1px solid var(--border2);border-radius:10px;padding:24px;width:100%;max-width:540px;max-height:92vh;overflow-y:auto;}
+.modal-title{font-size:15px;font-weight:700;margin-bottom:18px;display:flex;align-items:center;gap:8px;}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
+.form-group{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;}
+label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+input,select,textarea{background:var(--bg);border:1px solid var(--border);border-radius:var(--r);color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-size:12px;padding:8px 10px;outline:none;transition:border-color 0.15s;width:100%;}
+input:focus,select:focus,textarea:focus{border-color:var(--kst);}
+input[type=number]{font-family:'IBM Plex Mono',monospace;}
+.faze-section{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:13px;margin-bottom:10px;}
+.faze-section-title{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;font-family:'IBM Plex Mono',monospace;display:flex;align-items:center;gap:6px;}
+.faze-sec-dot{width:8px;height:8px;border-radius:2px;}
+.faze-inp-row{display:grid;grid-template-columns:140px 1fr 60px;align-items:center;gap:8px;margin-bottom:7px;}
+.faze-inp-label{display:flex;align-items:center;gap:6px;font-size:12px;}
+.faze-inp-dot{width:9px;height:9px;border-radius:2px;flex-shrink:0;}
+.faze-unit{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+.faze-total{margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--vyr);}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid var(--border);}
+
+/* TOOLTIP */
+.tooltip{position:fixed;background:#1a1c22;border:1px solid var(--border2);border-radius:5px;padding:8px 11px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--text);pointer-events:none;z-index:1000;line-height:1.6;box-shadow:0 4px 16px rgba(0,0,0,0.5);}
+
+/* empty */
+.empty{text-align:center;padding:50px 20px;color:var(--muted);}
+.empty-icon{font-size:32px;margin-bottom:10px;}
+`;
+
+// ─── GANTT UTILS ──────────────────────────────────────────────────────────────
+// phases are now stored per-zakazka as { phaseId: { start: ISO, dur: days } }
+// They are INDEPENDENT – not chained. User drags them freely.
+
+function phaseEnd(ph) {
+  return toISO(addDays(parseDate(ph.start), ph.dur - 1));
+}
+
+// ─── CASCADE HELPER (also used by GanttView for live drag preview) ────────────
+// Work purely in integer days to avoid timezone/rounding issues
+function dateToDay(iso) {
+  // Days since epoch, computed purely from the date string to avoid TZ issues
+  const [y, m, d] = iso.split("-").map(Number);
+  return Math.round(Date.UTC(y, m - 1, d) / 86400000);
+}
+function dayToISO(day) {
+  const d = new Date(day * 86400000);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+function computeCascade(phases, phaseId, newStart) {
+  const ORDER = ["koncepce", "konstrukce", "vyroba", "montaz"];
+  const movedIdx = ORDER.indexOf(phaseId);
+  const result = { ...phases };
+  result[phaseId] = { ...result[phaseId], start: newStart };
+
+  // Push FORWARD: if cur end-day > nxt start-day → push nxt to start right after cur
+  for (let i = movedIdx; i < ORDER.length - 1; i++) {
+    const cur = result[ORDER[i]];
+    const nxt = result[ORDER[i + 1]];
+    if (!cur || !nxt) continue;
+    const curEndDay = dateToDay(cur.start) + cur.dur; // exclusive end (first day after)
+    const nxtStartDay = dateToDay(nxt.start);
+    if (curEndDay > nxtStartDay) {
+      result[ORDER[i + 1]] = { ...nxt, start: dayToISO(curEndDay) };
+    }
+  }
+
+  // Push BACKWARD: if prev end-day > cur start-day → push prev back
+  for (let i = movedIdx; i > 0; i--) {
+    const cur = result[ORDER[i]];
+    const prev = result[ORDER[i - 1]];
+    if (!cur || !prev) continue;
+    const prevEndDay = dateToDay(prev.start) + prev.dur;
+    const curStartDay = dateToDay(cur.start);
+    if (prevEndDay > curStartDay) {
+      result[ORDER[i - 1]] = { ...prev, start: dayToISO(curStartDay - prev.dur) };
+    }
+  }
+
+  return result;
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+function App({ zakazkyOverride, onUpsert, onDelete, onUpdatePhase, syncing }) {
+  const [zakazkyLocal, setZakazkyLocal] = useState(() => loadZakazky());
+  const [tab, setTab]         = useState("gantt");
+  const [modal, setModal]     = useState(null);
+  const [showAll, setShowAll] = useState(true);
+  const [zoomIdx, setZoomIdx] = useState(DEFAULT_ZOOM);
+  const [startOffset, setStartOffset] = useState(-2);
+
+  const zakazky = zakazkyOverride ?? zakazkyLocal;
+
+  const upsertZakazka = (z) => {
+    if (onUpsert) { onUpsert(z); return; }
+    setZakazkyLocal(prev => {
+      const exists = prev.find(x => x.id === z.id);
+      return exists ? prev.map(x => x.id === z.id ? z : x) : [...prev, z];
+    });
+  };
+  const deleteZakazka = (id) => {
+    if (onDelete) { onDelete(id); return; }
+    setZakazkyLocal(prev => prev.filter(z => z.id !== id));
+  };
+
+  const updatePhase = useCallback((zakazkaId, phaseId, newStart) => {
+    if (onUpdatePhase) { onUpdatePhase(zakazkaId, phaseId, newStart); return; }
+    setZakazkyLocal(prev => prev.map(z => {
+      if (z.id !== zakazkaId) return z;
+      return { ...z, phases: computeCascade(z.phases, phaseId, newStart) };
+    }));
+  }, [onUpdatePhase]);
+
+  const filteredZakazky = showAll ? zakazky : zakazky.filter(z => z.stav === "Probíhá" || z.stav === "Nová");
+
+  // Stats
+  const todayStr = toISO(new Date());
+  const overdue = zakazky.filter(z => {
+    const ends = Object.values(z.phases || {}).filter(Boolean).map(p => phaseEnd(p));
+    const last = ends.sort().at(-1);
+    return last && last < todayStr && z.stav !== "Hotovo";
+  }).length;
+
+  return (
+    <div className="app">
+      <style>{S}</style>
+
+      <header className="hdr">
+        <div className="brand">
+          <div className="brand-box">⚙</div>
+          <div>
+            <div className="brand-title">DÍLENSKÝ PLÁNOVAČ</div>
+            <div className="brand-sub">drag &amp; drop · Gantt · Kapacity</div>
+          </div>
+        </div>
+        <div className="hdr-right">
+          {syncing && <span style={{fontSize:10,color:"var(--muted)",fontFamily:"IBM Plex Mono,monospace"}}>⏳ ukládám...</span>}
+          <button className="btn btn-ghost" onClick={() => setModal({ type:"new" })}>+ Zakázka</button>
+        </div>
+      </header>
+
+      <div className="tabs">
+        {[["gantt","📊 Gantt"], ["prehled","📋 Přehled"]].map(([id,lbl]) => (
+          <button key={id} className={`tab${tab===id?" active":""}`} onClick={() => setTab(id)}>{lbl}</button>
+        ))}
+      </div>
+
+      {tab === "gantt" && (
+        <GanttView
+          zakazky={filteredZakazky}
+          zoomIdx={zoomIdx} setZoomIdx={setZoomIdx}
+          startOffset={startOffset} setStartOffset={setStartOffset}
+          showAll={showAll} setShowAll={setShowAll}
+          onUpdatePhase={updatePhase}
+          onEditZakazka={(z) => setModal({ type:"edit", zakazka: z })}
+        />
+      )}
+
+      {tab === "prehled" && (
+        <div className="content">
+          <div className="stats">
+            <div className="stat"><div className="stat-lbl">Zakázek</div><div className="stat-val" style={{color:"var(--kst)"}}>{zakazky.length}</div></div>
+            <div className="stat"><div className="stat-lbl">Probíhá</div><div className="stat-val">{zakazky.filter(z=>z.stav==="Probíhá").length}</div></div>
+            <div className="stat"><div className="stat-lbl">Po termínu</div><div className="stat-val" style={{color:"var(--danger)"}}>{overdue}</div></div>
+            <div className="stat"><div className="stat-lbl">Dokončeno</div><div className="stat-val" style={{color:"var(--vyr)"}}>{zakazky.filter(z=>z.stav==="Hotovo").length}</div></div>
+          </div>
+          <div className="tbl-wrap">
+            <table>
+              <thead>
+                <tr><th>ID</th><th>Název</th><th>Zákazník</th><th>Fáze</th><th>Stav</th><th></th></tr>
+              </thead>
+              <tbody>
+                {zakazky.map(z => (
+                  <tr key={z.id} style={{cursor:"pointer"}} onClick={() => setModal({type:"edit",zakazka:z})}>
+                    <td><span className="mono" style={{color:"var(--kst)",fontWeight:700}}>{z.id}</span></td>
+                    <td style={{fontWeight:600}}>{z.name}</td>
+                    <td style={{color:"var(--muted)"}}>{z.customer||"–"}</td>
+                    <td>
+                      <div className="faze-pills">
+                        {ALL_FAZE.map(f => z.phases?.[f.id] ? (
+                          <span key={f.id} className="faze-pill" style={{background:f.color}}>{f.short} {z.phases[f.id].dur}d</span>
+                        ) : null)}
+                      </div>
+                    </td>
+                    <td><span className="badge" style={{background:`${STAV_COLORS[z.stav]}20`,color:STAV_COLORS[z.stav]}}>{z.stav}</span></td>
+                    <td><button className="btn btn-ghost" style={{fontSize:10,padding:"4px 8px"}} onClick={e=>{e.stopPropagation();setModal({type:"edit",zakazka:z});}}>Upravit</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {modal && (
+        <ZakazkaModal
+          zakazka={modal.type==="edit" ? modal.zakazka : null}
+          onSave={(z) => { upsertZakazka(z); setModal(null); }}
+          onDelete={(id) => { deleteZakazka(id); setModal(null); }}
+          onClose={() => setModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── GANTT VIEW ───────────────────────────────────────────────────────────────
+function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, showAll, setShowAll, onUpdatePhase, onEditZakazka }) {
+  const containerRef = useRef(null);
+  const [tooltip, setTooltip] = useState(null);
+  const [dragging, setDragging] = useState(null); // { zakazkaId, phaseId, origStart, origX }
+  const [connector, setConnector] = useState(true);
+
+  const zoom        = ZOOM_LEVELS[zoomIdx];
+  const weekCount   = zoom.weeks;
+  const dayPx       = zoom.dayPx;
+  const showDays    = dayPx >= 14; // show individual day columns when zoomed in enough
+
+  const todayMonday = getMondayOf(new Date());
+  const ganttStart  = addDays(todayMonday, startOffset * 7);
+  const totalDays   = weekCount * 7;
+
+  // Build columns: days when zoomed in, weeks when zoomed out
+  const days  = Array.from({ length: totalDays }, (_, i) => addDays(ganttStart, i));
+  const weeks = Array.from({ length: weekCount }, (_, i) => addDays(ganttStart, i * 7));
+  const todayStr = toISO(new Date());
+
+  // Today line position
+  const todayOffset = Math.round((parseDate(todayStr) - ganttStart) / 86400000);
+  const todayPx = LABEL_W + todayOffset * dayPx;
+
+  // Convert date → pixel X (relative to gantt-body left)
+  const dateToPx = (dateStr) => {
+    const diffDays = Math.round((parseDate(dateStr) - ganttStart) / 86400000);
+    return LABEL_W + diffDays * dayPx;
+  };
+
+  const pxToDate = (px) => {
+    const diffDays = Math.round((px - LABEL_W) / dayPx);
+    return toISO(addDays(ganttStart, diffDays));
+  };
+
+  // ── DRAG HANDLERS ────────────────────────────────────────────────────────────
+  // dragActive = user moved more than DEAD_ZONE pixels → real drag, not accidental click
+  const DEAD_ZONE = 6; // px – must move this much before drag starts visually
+
+  const onMouseDown = useCallback((e, zakazkaId, phaseId, currentStart, origPhases) => {
+    e.preventDefault();
+    setDragging({
+      zakazkaId, phaseId,
+      origStart: currentStart,
+      origPhases,     // snapshot všech fází zakázky při začátku dragu
+      origX: e.clientX,
+      currentStart,
+      active: false,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!dragging) return;
+
+    const onMove = (e) => {
+      const dx = e.clientX - dragging.origX;
+      // Don't start visual drag until dead zone exceeded
+      if (!dragging.active && Math.abs(dx) < DEAD_ZONE) return;
+      // Use floor so bar snaps to full-day grid smoothly (no half-day jumps)
+      const daysDelta = Math.round(dx / dayPx);
+      const newStart = dayToISO(dateToDay(dragging.origStart) + daysDelta);
+      setDragging(d => ({ ...d, active: true, currentStart: newStart }));
+    };
+
+    const onUp = (e) => {
+      const dx = e.clientX - dragging.origX;
+      // If never left dead zone → treat as click, no move
+      if (!dragging.active || Math.abs(dx) < DEAD_ZONE) {
+        setDragging(null);
+        return;
+      }
+      const daysDelta = Math.round(dx / dayPx);
+      const newStart = dayToISO(dateToDay(dragging.origStart) + daysDelta);
+      onUpdatePhase(dragging.zakazkaId, dragging.phaseId, newStart);
+      setDragging(null);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [dragging, dayPx, onUpdatePhase]);
+
+  // ── RENDER ROWS for one section ───────────────────────────────────────────
+  function renderRows(faze, sectionColor) {
+    return zakazky.map((z, zi) => {
+      const rowY = zi * ROW_H;
+      return (
+        <div className="gantt-row" key={z.id} data-id={z.id}>
+          <div className="gantt-row-label" onClick={() => onEditZakazka(z)}>
+            <div className="gantt-row-id">{z.id}</div>
+            <div className="gantt-row-name">{z.name}</div>
+          </div>
+          <div className="gantt-cells" style={{position:"relative"}}>
+            {showDays
+              ? days.map((d, di) => {
+                  const dStr = toISO(d);
+                  const isToday = dStr === todayStr;
+                  const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                  return <div key={di} className={`gantt-cell${isToday?" today-wk":""}`} style={{minWidth:dayPx,width:dayPx,background:isWeekend?"rgba(255,255,255,0.02)":undefined}}/>;
+                })
+              : weeks.map((w, wi) => {
+                  const wStr = toISO(w);
+                  const isToday = wStr <= todayStr && todayStr < toISO(addDays(w,7));
+                  return <div key={wi} className={`gantt-cell${isToday?" today-wk":""}`} style={{minWidth:7*dayPx,width:7*dayPx}}/>;
+                })
+            }
+            {faze.map(f => {
+              const ph = z.phases?.[f.id];
+              if (!ph) return null;
+              // Compute cascade visually during drag
+              const isDraggingThis = dragging?.zakazkaId === z.id && dragging?.phaseId === f.id && dragging?.active;
+              const isAffectedByDrag = dragging?.zakazkaId === z.id && dragging?.active;
+              let displayStart = ph.start;
+              if (isAffectedByDrag) {
+                // Počítej kaskádu vždy od PŮVODNÍCH fází (snapshot při začátku dragu)
+                // → při tažení zpět se ostatní chlívečky vrátí na původní místo
+                const basePhasesForPreview = dragging.origPhases ?? z.phases;
+                const cascaded = computeCascade(basePhasesForPreview, dragging.phaseId, dragging.currentStart);
+                displayStart = cascaded[f.id]?.start ?? ph.start;
+              }
+              const left = dateToPx(displayStart) - LABEL_W;
+              const width = ph.dur * dayPx;
+              return (
+                <div
+                  key={f.id}
+                  className={`gantt-bar${isDraggingThis?" dragging":""}`}
+                  style={{ left, width, background: f.color, minWidth:20 }}
+                  onMouseDown={(e) => onMouseDown(e, z.id, f.id, ph.start, z.phases)}
+                  onMouseEnter={(e) => setTooltip({ x: e.clientX+12, y: e.clientY+12, z, f, ph: {...ph, start: displayStart} })}
+                  onMouseMove={(e) => setTooltip(t => t ? {...t, x: e.clientX+12, y: e.clientY+12} : null)}
+                  onMouseLeave={() => setTooltip(null)}
+                >
+                  {width > 30 ? f.short : ""}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    });
+  }
+
+  // ── CONNECTORS ────────────────────────────────────────────────────────────
+  function renderConnectors() {
+    if (!connector) return null;
+    return zakazky.map((z, zi) => {
+      const ingPhases = INZENYRINK.filter(f => z.phases?.[f.id]);
+      const vypPhases = VYROBA_FAZE.filter(f => z.phases?.[f.id]);
+
+      if (ingPhases.length === 0 || vypPhases.length === 0) return null;
+
+      // Last ing phase end → first vyp phase start
+      const lastIng = ingPhases.at(-1);
+      const firstVyp = vypPhases[0];
+
+      const phIng = z.phases[lastIng.id];
+      const phVyp = z.phases[firstVyp.id];
+
+      const isDragIng = dragging?.zakazkaId === z.id && dragging?.phaseId === lastIng.id;
+      const isDragVyp = dragging?.zakazkaId === z.id && dragging?.phaseId === firstVyp.id;
+      const ingStart = isDragIng ? dragging.currentStart : phIng.start;
+      const vypStart = isDragVyp ? dragging.currentStart : phVyp.start;
+
+      const ingEndPx  = dateToPx(toISO(addDays(parseDate(ingStart), phIng.dur))) - LABEL_W;
+      const vypStartPx = dateToPx(vypStart) - LABEL_W;
+
+      // We render SVG overlaid absolutely over the entire gantt-body
+      // Positions: ING section rows at top, VYP section rows below (with divider 4px)
+      const ingRowCount = zakazky.length;
+      const dividerH = 4;
+
+      const ingRowY = zi * ROW_H + ROW_H / 2 + sectionHdrH; // middle of ing row
+      const vypRowY = ingRowCount * ROW_H + sectionHdrH + dividerH + sectionHdrH + zi * ROW_H + ROW_H / 2; // middle of vyp row
+
+      const gap = phVyp.dur > 0 ? (vypStartPx - ingEndPx) : 0;
+      const color = gap < 0 ? "rgba(240,80,96,0.7)" : "rgba(120,130,160,0.5)";
+
+      return (
+        <line
+          key={z.id}
+          x1={LABEL_W + ingEndPx} y1={ingRowY}
+          x2={LABEL_W + vypStartPx} y2={vypRowY}
+          stroke={color} strokeWidth="1.5" strokeDasharray="4 3"
+        />
+      );
+    });
+  }
+
+  const totalH = zakazky.length * ROW_H;
+  const totalW = LABEL_W + totalDays * dayPx;
+  const sectionHdrH = showDays ? 46 : 30;
+  const dividerH = 4;
+  const svgH = 2 * sectionHdrH + 2 * totalH + dividerH;
+
+  return (
+    <div className="gantt-outer">
+      {/* TOOLBAR */}
+      <div className="gantt-toolbar">
+        <span className="gantt-toolbar-label">Zoom:</span>
+        {ZOOM_LEVELS.map((z, i) => (
+          <button key={i} className={`btn btn-ghost${zoomIdx===i?" btn-active":""}`} style={{fontSize:10,padding:"5px 9px"}} onClick={() => setZoomIdx(i)}>{z.label}</button>
+        ))}
+        <div style={{width:1,background:"var(--border)",height:20,margin:"0 4px"}}/>
+        <span className="gantt-toolbar-label">Posun:</span>
+        <button className="btn btn-ghost" style={{fontSize:10,padding:"5px 9px"}} onClick={() => setStartOffset(p=>p-2)}>←</button>
+        <button className="btn btn-ghost" style={{fontSize:10,padding:"5px 9px"}} onClick={() => setStartOffset(0)}>Dnes</button>
+        <button className="btn btn-ghost" style={{fontSize:10,padding:"5px 9px"}} onClick={() => setStartOffset(p=>p+2)}>→</button>
+        <div style={{width:1,background:"var(--border)",height:20,margin:"0 4px"}}/>
+        <button className={`btn btn-ghost${connector?" btn-active":""}`} style={{fontSize:10,padding:"5px 9px"}} onClick={() => setConnector(p=>!p)}>
+          🔗 Propojení
+        </button>
+        <button className={`btn btn-ghost${!showAll?" btn-active":""}`} style={{fontSize:10,padding:"5px 9px"}} onClick={() => setShowAll(p=>!p)}>
+          {showAll ? "Aktivní" : "Vše"}
+        </button>
+        <div style={{marginLeft:"auto",display:"flex",gap:10}}>
+          {ALL_FAZE.map(f => (
+            <div key={f.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
+              <div style={{width:10,height:10,borderRadius:2,background:f.color}}/>
+              <span style={{color:"var(--muted)"}}>{f.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* GANTT BODY */}
+      <div className="gantt-body" ref={containerRef} style={{position:"relative"}}>
+        {zakazky.length === 0 ? (
+          <div className="empty"><div className="empty-icon">📊</div><div style={{fontSize:13,color:"var(--muted)"}}>Přidej zakázky tlačítkem + Zakázka</div></div>
+        ) : (
+          <div style={{position:"relative",width:totalW,minWidth:"100%"}}>
+
+            {/* SVG for connectors */}
+            {connector && (
+              <svg style={{position:"absolute",top:0,left:0,width:totalW,height:svgH,pointerEvents:"none",zIndex:3}} viewBox={`0 0 ${totalW} ${svgH}`} preserveAspectRatio="none">
+                {renderConnectors()}
+              </svg>
+            )}
+
+            {/* TODAY LINE */}
+            {todayOffset >= 0 && todayOffset <= totalDays && (
+              <div className="today-line" style={{left: todayPx, height: svgH}}/>
+            )}
+
+            {/* ─── INŽENÝRING SEKCE ─── */}
+            <div className="gantt-section-hdr" style={{height:sectionHdrH,alignItems:"stretch"}}>
+              <div className="gantt-section-label" style={{height:"100%"}}>
+                <div className="gantt-section-dot" style={{background:"var(--kon)"}}/>
+                Návrh & Konstrukce
+              </div>
+              <GanttTimeHeader days={days} weeks={weeks} showDays={showDays} dayPx={dayPx} todayStr={todayStr} />
+            </div>
+            {renderRows(INZENYRINK, "#7c9ef5")}
+
+            {/* ─── DIVIDER ─── */}
+            <div className="gantt-divider" style={{width:totalW}}>
+              <span className="gantt-divider-label">▼ VÝROBA &amp; MONTÁŽ</span>
+            </div>
+
+            {/* ─── VÝROBA SEKCE ─── */}
+            <div className="gantt-section-hdr" style={{height:sectionHdrH,alignItems:"stretch"}}>
+              <div className="gantt-section-label" style={{height:"100%"}}>
+                <div className="gantt-section-dot" style={{background:"var(--vyr)"}}/>
+                Výroba &amp; Montáž
+              </div>
+              <GanttTimeHeader days={days} weeks={weeks} showDays={showDays} dayPx={dayPx} todayStr={todayStr} />
+            </div>
+            {renderRows(VYROBA_FAZE, "#4af0a0")}
+
+          </div>
+        )}
+      </div>
+
+      {/* TOOLTIP */}
+      {tooltip && (
+        <div className="tooltip" style={{left:tooltip.x, top:tooltip.y}}>
+          <div style={{color:tooltip.f.color,fontWeight:700,marginBottom:3}}>{tooltip.z.id} · {tooltip.f.label}</div>
+          <div>Start: {formatCZ(tooltip.ph.start)}</div>
+          <div>Konec: {formatCZ(phaseEnd(tooltip.ph))}</div>
+          <div>Délka: {tooltip.ph.dur} dní</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── GANTT TIME HEADER ───────────────────────────────────────────────────────
+function GanttTimeHeader({ days, weeks, showDays, dayPx, todayStr }) {
+  const DAY_NAMES = ["Ne","Po","Út","St","Čt","Pá","So"];
+
+  if (showDays) {
+    // Two-row header: month/week label on top, individual days below
+    // Group days by week for the top row
+    const weekGroups = [];
+    let cur = null;
+    days.forEach((d, i) => {
+      const wk = getISOWeek(d);
+      const mo = d.getMonth();
+      const key = `${d.getFullYear()}-${wk}`;
+      if (!cur || cur.key !== key) {
+        cur = { key, label: `T${wk} · ${d.toLocaleDateString("cs-CZ",{month:"short"})}`, count: 0, startIdx: i };
+        weekGroups.push(cur);
+      }
+      cur.count++;
+    });
+
+    return (
+      <div className="gantt-weeks-hdr" style={{flexDirection:"column",flex:1}}>
+        {/* Top row: week + month */}
+        <div style={{display:"flex",borderBottom:"1px solid var(--border2)"}}>
+          {weekGroups.map((g,i) => (
+            <div key={i} style={{minWidth:g.count*dayPx,width:g.count*dayPx,padding:"3px 5px",fontSize:9,fontFamily:"IBM Plex Mono,monospace",color:"var(--muted)",borderRight:"1px solid var(--border)",overflow:"hidden",whiteSpace:"nowrap",letterSpacing:"0.5px"}}>
+              {g.label}
+            </div>
+          ))}
+        </div>
+        {/* Bottom row: individual days */}
+        <div style={{display:"flex"}}>
+          {days.map((d, i) => {
+            const dStr = toISO(d);
+            const isToday = dStr === todayStr;
+            const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+            const dayName = DAY_NAMES[d.getDay()];
+            return (
+              <div key={i} style={{
+                minWidth:dayPx, width:dayPx,
+                padding:"3px 2px",
+                textAlign:"center",
+                fontSize:9,
+                fontFamily:"IBM Plex Mono,monospace",
+                color: isToday ? "var(--kst)" : isWeekend ? "var(--muted2)" : "var(--muted)",
+                background: isToday ? "rgba(240,192,64,0.1)" : isWeekend ? "rgba(255,255,255,0.015)" : "transparent",
+                borderRight:"1px solid var(--border)",
+                lineHeight:1.3,
+                overflow:"hidden",
+              }}>
+                {dayPx >= 20 ? <>{dayName}<br/><span style={{fontSize:8,opacity:0.7}}>{d.getDate()}</span></> : d.getDate()}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // Week view (zoomed out)
+  return (
+    <div className="gantt-weeks-hdr">
+      {weeks.map((w, i) => {
+        const isToday = toISO(w) <= todayStr && todayStr < toISO(addDays(w, 7));
+        return (
+          <div key={i} className={`gantt-week-hdr${isToday?" today-wk":""}`} style={{minWidth:7*dayPx,width:7*dayPx}}>
+            T{getISOWeek(w)}<br/>
+            <span style={{fontSize:8,opacity:0.6}}>{w.getDate()}.{w.getMonth()+1}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── MODAL ────────────────────────────────────────────────────────────────────
+function ZakazkaModal({ zakazka, onSave, onDelete, onClose }) {
+  const isEdit = !!zakazka;
+  const genId = () => `Z-${String(Date.now()).slice(-4)}`;
+
+  const defaultPhase = (offsetDays, dur) => ({
+    start: toISO(addDays(new Date(), offsetDays)), dur
+  });
+
+  const [form, setForm] = useState(() => ({
+    id:       zakazka?.id || genId(),
+    name:     zakazka?.name || "",
+    customer: zakazka?.customer || "",
+    stav:     zakazka?.stav || "Nová",
+    note:     zakazka?.note || "",
+    phases: {
+      koncepce:   zakazka?.phases?.koncepce   || defaultPhase(0,  7),
+      konstrukce: zakazka?.phases?.konstrukce || defaultPhase(7,  14),
+      vyroba:     zakazka?.phases?.vyroba     || defaultPhase(21, 20),
+      montaz:     zakazka?.phases?.montaz     || defaultPhase(41, 5),
+    }
+  }));
+
+  const setPhaseDur = (id, val) =>
+    setForm(p => ({ ...p, phases: { ...p.phases, [id]: { ...p.phases[id], dur: Math.max(1, parseInt(val)||1) } } }));
+  const setPhaseStart = (id, val) =>
+    setForm(p => ({ ...p, phases: { ...p.phases, [id]: { ...p.phases[id], start: val } } }));
+
+  const handleSave = () => { if (!form.name || !form.id.trim()) return; onSave({...form, id: form.id.trim()}); };
+
+  const renderFazeGroup = (faze, title, dotColor) => (
+    <div className="faze-section">
+      <div className="faze-section-title">
+        <div className="faze-sec-dot" style={{background:dotColor}}/>
+        {title}
+      </div>
+      {faze.map(f => (
+        <div className="faze-inp-row" key={f.id}>
+          <div className="faze-inp-label">
+            <div className="faze-inp-dot" style={{background:f.color}}/>
+            {f.label}
+          </div>
+          <input type="date" value={form.phases[f.id]?.start||""} onChange={e=>setPhaseStart(f.id, e.target.value)} />
+          <div style={{display:"flex",alignItems:"center",gap:5}}>
+            <input type="number" min={1} max={999} value={form.phases[f.id]?.dur||0} onChange={e=>setPhaseDur(f.id, e.target.value)} style={{width:55,textAlign:"center"}} />
+            <span className="faze-unit">dní</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal">
+        <div className="modal-title">⚙ {isEdit ? `Zakázka ${zakazka.id}` : "Nová zakázka"}</div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label>Číslo / ID zakázky *</label>
+            <input value={form.id} onChange={e=>setForm(p=>({...p,id:e.target.value}))} placeholder="2024-047" style={{fontFamily:"IBM Plex Mono,monospace",color:"var(--kst)"}} />
+          </div>
+          <div className="form-group">
+            <label>Stav</label>
+            <select value={form.stav} onChange={e=>setForm(p=>({...p,stav:e.target.value}))}>
+              {STAV_OPTIONS.map(s=><option key={s}>{s}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-group">
+            <label>Název zakázky *</label>
+            <input value={form.name} onChange={e=>setForm(p=>({...p,name:e.target.value}))} placeholder="Schodiště Brno..." />
+          </div>
+          <div className="form-group">
+            <label>Zákazník</label>
+            <input value={form.customer} onChange={e=>setForm(p=>({...p,customer:e.target.value}))} placeholder="Firma / jméno" />
+          </div>
+        </div>
+
+
+        {renderFazeGroup(INZENYRINK, "Návrh & Konstrukce", "#7c9ef5")}
+        {renderFazeGroup(VYROBA_FAZE, "Výroba & Montáž", "#4af0a0")}
+
+        <div className="form-group">
+          <label>Poznámka</label>
+          <textarea rows={2} value={form.note} onChange={e=>setForm(p=>({...p,note:e.target.value}))} placeholder="Interní poznámka..."/>
+        </div>
+
+        <div className="modal-footer">
+          {isEdit && <button className="btn btn-danger" onClick={()=>{if(confirm("Smazat zakázku?"))onDelete(zakazka.id);}}>Smazat</button>}
+          <button className="btn btn-ghost" onClick={onClose}>Zrušit</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={!form.name || !form.id.trim()}>
+            {isEdit ? "Uložit" : "Přidat"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function FirebaseApp() {
+  const [zakazky, setZakazky] = React.useState(null);
+  const [syncing, setSyncing] = React.useState(false);
+
+  useEffect(() => {
+    const unsub = db.collection("zakazky").orderBy("createdAt", "asc").onSnapshot(snapshot => {
+      setZakazky(snapshot.docs.map(doc => ({ ...doc.data(), _docId: doc.id })));
+    }, err => { console.error("Firebase:", err); setZakazky([]); });
+    return () => unsub();
+  }, []);
+
+  const upsertZakazka = async (z) => {
+    setSyncing(true);
+    try {
+      const { _docId, ...data } = z;
+      if (_docId) await db.collection("zakazky").doc(_docId).set(data);
+      else await db.collection("zakazky").add({ ...data, createdAt: Date.now() });
+    } catch(e) { console.error(e); }
+    setSyncing(false);
+  };
+
+  const deleteZakazka = async (zakazkaId) => {
+    setSyncing(true);
+    try {
+      const snap = await db.collection("zakazky").where("id", "==", zakazkaId).get();
+      for (const doc of snap.docs) await doc.ref.delete();
+    } catch(e) { console.error(e); }
+    setSyncing(false);
+  };
+
+  const updatePhase = React.useCallback(async (zakazkaId, phaseId, newStart) => {
+    const z = zakazky?.find(x => x.id === zakazkaId);
+    if (!z?._docId) return;
+    const newPhases = computeCascade(z.phases, phaseId, newStart);
+    try { await db.collection("zakazky").doc(z._docId).update({ phases: newPhases }); }
+    catch(e) { console.error(e); }
+  }, [zakazky]);
+
+  if (zakazky === null) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0e0f11",color:"#f0c040",fontFamily:"IBM Plex Mono,monospace",flexDirection:"column",gap:12}}>
+      <div style={{fontSize:24}}>⚙</div><div>Připojuji k databázi...</div>
+    </div>
+  );
+
+  return <App zakazkyOverride={zakazky} onUpsert={upsertZakazka} onDelete={deleteZakazka} onUpdatePhase={updatePhase} syncing={syncing} />;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(FirebaseApp));
+
+</script>
+</body>
+</html>
