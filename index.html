@@ -882,8 +882,14 @@ function FirebaseApp() {
     setSyncing(true);
     try {
       const { _docId, ...data } = z;
-      if (_docId) await db.collection("zakazky").doc(_docId).set(data);
-      else await db.collection("zakazky").add({ ...data, createdAt: Date.now() });
+      if (_docId) {
+        // Zachovej createdAt z existujícího dokumentu
+        const existing = zakazky?.find(x => x._docId === _docId);
+        const createdAt = existing?.createdAt || Date.now();
+        await db.collection("zakazky").doc(_docId).set({ ...data, createdAt });
+      } else {
+        await db.collection("zakazky").add({ ...data, createdAt: Date.now() });
+      }
     } catch(e) { console.error(e); }
     setSyncing(false);
   };
