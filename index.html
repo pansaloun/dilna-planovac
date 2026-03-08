@@ -275,7 +275,6 @@ function App({ zakazkyOverride, onUpsert, onDelete, onUpdatePhase, syncing }) {
   const [zoomIdx, setZoomIdx] = useState(DEFAULT_ZOOM);
   const [startOffset, setStartOffset] = useState(-2);
 
-  // Použij Firebase data pokud jsou dostupná, jinak lokální
   const zakazky = zakazkyOverride ?? zakazkyLocal;
 
   const upsertZakazka = (z) => {
@@ -431,14 +430,15 @@ function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, 
   // dragActive = user moved more than DEAD_ZONE pixels → real drag, not accidental click
   const DEAD_ZONE = 6; // px – must move this much before drag starts visually
 
-  const onMouseDown = useCallback((e, zakazkaId, phaseId, currentStart) => {
+  const onMouseDown = useCallback((e, zakazkaId, phaseId, currentStart, origPhases) => {
     e.preventDefault();
     setDragging({
       zakazkaId, phaseId,
       origStart: currentStart,
+      origPhases,     // snapshot všech fází zakázky při začátku dragu
       origX: e.clientX,
-      currentStart,   // visual position (only changes after dead zone)
-      active: false,  // becomes true once dead zone exceeded
+      currentStart,
+      active: false,
     });
   }, []);
 
@@ -505,7 +505,10 @@ function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, 
               const isAffectedByDrag = dragging?.zakazkaId === z.id && dragging?.active;
               let displayStart = ph.start;
               if (isAffectedByDrag) {
-                const cascaded = computeCascade(z.phases, dragging.phaseId, dragging.currentStart);
+                // Počítej kaskádu vždy od PŮVODNÍCH fází (snapshot při začátku dragu)
+                // → při tažení zpět se ostatní chlívečky vrátí na původní místo
+                const basePhasesForPreview = dragging.origPhases ?? z.phases;
+                const cascaded = computeCascade(basePhasesForPreview, dragging.phaseId, dragging.currentStart);
                 displayStart = cascaded[f.id]?.start ?? ph.start;
               }
               const left = dateToPx(displayStart) - LABEL_W;
@@ -515,7 +518,7 @@ function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, 
                   key={f.id}
                   className={`gantt-bar${isDraggingThis?" dragging":""}`}
                   style={{ left, width, background: f.color, minWidth:20 }}
-                  onMouseDown={(e) => onMouseDown(e, z.id, f.id, ph.start)}
+                  onMouseDown={(e) => onMouseDown(e, z.id, f.id, ph.start, z.phases)}
                   onMouseEnter={(e) => setTooltip({ x: e.clientX+12, y: e.clientY+12, z, f, ph: {...ph, start: displayStart} })}
                   onMouseMove={(e) => setTooltip(t => t ? {...t, x: e.clientX+12, y: e.clientY+12} : null)}
                   onMouseLeave={() => setTooltip(null)}
@@ -850,19 +853,14 @@ function ZakazkaModal({ zakazka, onSave, onDelete, onClose }) {
 }
 
 
-// ─── FIREBASE SYNC WRAPPER ────────────────────────────────────────────────────
 function FirebaseApp() {
   const [zakazky, setZakazky] = React.useState(null);
   const [syncing, setSyncing] = React.useState(false);
 
   useEffect(() => {
     const unsub = db.collection("zakazky").orderBy("createdAt", "asc").onSnapshot(snapshot => {
-      const data = snapshot.docs.map(doc => ({ ...doc.data(), _docId: doc.id }));
-      setZakazky(data);
-    }, err => {
-      console.error("Firebase:", err);
-      setZakazky([]);
-    });
+      setZakazky(snapshot.docs.map(doc => ({ ...doc.data(), _docId: doc.id })));
+    }, err => { console.error("Firebase:", err); setZakazky([]); });
     return () => unsub();
   }, []);
 
@@ -870,11 +868,8 @@ function FirebaseApp() {
     setSyncing(true);
     try {
       const { _docId, ...data } = z;
-      if (_docId) {
-        await db.collection("zakazky").doc(_docId).set(data);
-      } else {
-        await db.collection("zakazky").add({ ...data, createdAt: Date.now() });
-      }
+      if (_docId) await db.collection("zakazky").doc(_docId).set(data);
+      else await db.collection("zakazky").add({ ...data, createdAt: Date.now() });
     } catch(e) { console.error(e); }
     setSyncing(false);
   };
@@ -890,21 +885,17 @@ function FirebaseApp() {
 
   const updatePhase = React.useCallback(async (zakazkaId, phaseId, newStart) => {
     const z = zakazky?.find(x => x.id === zakazkaId);
-    if (!z || !z._docId) return;
+    if (!z?._docId) return;
     const newPhases = computeCascade(z.phases, phaseId, newStart);
-    try {
-      await db.collection("zakazky").doc(z._docId).update({ phases: newPhases });
-    } catch(e) { console.error(e); }
+    try { await db.collection("zakazky").doc(z._docId).update({ phases: newPhases }); }
+    catch(e) { console.error(e); }
   }, [zakazky]);
 
-  if (zakazky === null) {
-    return (
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0e0f11",color:"#f0c040",fontFamily:"IBM Plex Mono,monospace",flexDirection:"column",gap:12}}>
-        <div style={{fontSize:24}}>⚙</div>
-        <div>Připojuji k databázi...</div>
-      </div>
-    );
-  }
+  if (zakazky === null) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0e0f11",color:"#f0c040",fontFamily:"IBM Plex Mono,monospace",flexDirection:"column",gap:12}}>
+      <div style={{fontSize:24}}>⚙</div><div>Připojuji k databázi...</div>
+    </div>
+  );
 
   return <App zakazkyOverride={zakazky} onUpsert={upsertZakazka} onDelete={deleteZakazka} onUpdatePhase={updatePhase} syncing={syncing} />;
 }
