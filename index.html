@@ -71,7 +71,6 @@ const ZOOM_LEVELS = [
   { label:"1R", weeks:52, dayPx:3   },
 ];
 const DEFAULT_ZOOM = 3; // index into ZOOM_LEVELS
-const ROW_H   = 48; // px per row
 const LABEL_W = 220; // px for label column
 
 // ─── DEMO DATA ────────────────────────────────────────────────────────────────
@@ -151,7 +150,7 @@ body{background:var(--bg);font-family:'Inter',sans-serif;color:var(--text);font-
 .gantt-cell.today-wk{background:rgba(240,192,64,0.07);}
 
 /* GANTT BARS */
-.gantt-bar{position:absolute;top:8px;height:40px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;font-family:'JetBrains Mono',monospace;font-weight:700;color:#111;overflow:hidden;white-space:nowrap;z-index:5;box-shadow:0 2px 8px rgba(0,0,0,0.35);}
+.gantt-bar{position:absolute;border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-weight:700;color:#111;overflow:hidden;white-space:nowrap;z-index:5;box-shadow:0 2px 8px rgba(0,0,0,0.35);}
 .gantt-bar.dragging{opacity:0.85;box-shadow:0 4px 16px rgba(0,0,0,0.5);z-index:20;cursor:grabbing!important;}
 .gantt-bar:not(.dragging){cursor:grab;}
 .gantt-bar:not(.dragging):hover{filter:brightness(1.1);}
@@ -414,6 +413,8 @@ function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, 
   const zoom        = ZOOM_LEVELS[zoomIdx];
   const weekCount   = zoom.weeks;
   const dayPx       = zoom.dayPx;
+  // Dynamická výška řádku podle zoomu – při malém zoomu menší řádky
+  const ROW_H = dayPx >= 20 ? 64 : dayPx >= 14 ? 56 : dayPx >= 10 ? 44 : 36;
   const showDays    = dayPx >= 14; // show individual day columns when zoomed in enough
 
   const todayMonday = getMondayOf(new Date());
@@ -536,7 +537,7 @@ function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, 
                 <div
                   key={f.id}
                   className={`gantt-bar${isDraggingThis?" dragging":""}`}
-                  style={{ left, width, background: f.color, minWidth:20 }}
+                  style={{ left, width, background: f.color, minWidth:20, top: Math.round(ROW_H*0.14), height: Math.round(ROW_H*0.65), fontSize: ROW_H >= 56 ? 13 : ROW_H >= 44 ? 11 : 9 }}
                   onMouseDown={(e) => onMouseDown(e, z.id, f.id, ph.start, z.phases)}
                   onMouseEnter={(e) => setTooltip({ x: e.clientX+12, y: e.clientY+12, z, f, ph: {...ph, start: displayStart} })}
                   onMouseMove={(e) => setTooltip(t => t ? {...t, x: e.clientX+12, y: e.clientY+12} : null)}
@@ -600,7 +601,7 @@ function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, 
 
   const totalH = zakazky.length * ROW_H;
   const totalW = LABEL_W + totalDays * dayPx;
-  const sectionHdrH = showDays ? 46 : 30;
+  const sectionHdrH = showDays ? Math.max(36, ROW_H * 0.7) : Math.max(26, ROW_H * 0.5);
   const dividerH = 4;
   const svgH = 2 * sectionHdrH + 2 * totalH + dividerH;
 
