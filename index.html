@@ -774,6 +774,7 @@ function ZakazkaModal({ zakazka, onSave, onDelete, onClose }) {
   });
 
   const [form, setForm] = useState(() => ({
+    _docId:   zakazka?._docId || null,
     id:       zakazka?.id || genId(),
     name:     zakazka?.name || "",
     customer: zakazka?.customer || "",
