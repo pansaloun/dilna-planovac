@@ -268,34 +268,29 @@ function computeCascade(phases, phaseId, newStart) {
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 function App({ zakazkyOverride, onUpsert, onDelete, onUpdatePhase, syncing }) {
-  const [zakazkyLocal, setZakazkyLocal] = useState(() => loadZakazky());
+  const [zakazky, setZakazky] = useState(() => loadZakazky());
   const [tab, setTab]         = useState("gantt");
   const [modal, setModal]     = useState(null);
   const [showAll, setShowAll] = useState(true);
   const [zoomIdx, setZoomIdx] = useState(DEFAULT_ZOOM);
   const [startOffset, setStartOffset] = useState(-2);
 
-  const zakazky = zakazkyOverride ?? zakazkyLocal;
+  useEffect(() => { saveZakazky(zakazky); }, [zakazky]);
 
   const upsertZakazka = (z) => {
-    if (onUpsert) { onUpsert(z); return; }
-    setZakazkyLocal(prev => {
+    setZakazky(prev => {
       const exists = prev.find(x => x.id === z.id);
       return exists ? prev.map(x => x.id === z.id ? z : x) : [...prev, z];
     });
   };
-  const deleteZakazka = (id) => {
-    if (onDelete) { onDelete(id); return; }
-    setZakazkyLocal(prev => prev.filter(z => z.id !== id));
-  };
+  const deleteZakazka = (id) => setZakazky(prev => prev.filter(z => z.id !== id));
 
   const updatePhase = useCallback((zakazkaId, phaseId, newStart) => {
-    if (onUpdatePhase) { onUpdatePhase(zakazkaId, phaseId, newStart); return; }
-    setZakazkyLocal(prev => prev.map(z => {
+    setZakazky(prev => prev.map(z => {
       if (z.id !== zakazkaId) return z;
       return { ...z, phases: computeCascade(z.phases, phaseId, newStart) };
     }));
-  }, [onUpdatePhase]);
+  }, []);
 
   const filteredZakazky = showAll ? zakazky : zakazky.filter(z => z.stav === "Probíhá" || z.stav === "Nová");
 
@@ -858,9 +853,13 @@ function FirebaseApp() {
   const [syncing, setSyncing] = React.useState(false);
 
   useEffect(() => {
-    const unsub = db.collection("zakazky").orderBy("createdAt", "asc").onSnapshot(snapshot => {
-      setZakazky(snapshot.docs.map(doc => ({ ...doc.data(), _docId: doc.id })));
-    }, err => { console.error("Firebase:", err); setZakazky([]); });
+    const unsub = db.collection("zakazky").onSnapshot(snapshot => {
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), _docId: doc.id }));
+      setZakazky(data);
+    }, err => {
+      console.error("Firebase:", err);
+      setZakazky([]);
+    });
     return () => unsub();
   }, []);
 
@@ -887,8 +886,9 @@ function FirebaseApp() {
     const z = zakazky?.find(x => x.id === zakazkaId);
     if (!z?._docId) return;
     const newPhases = computeCascade(z.phases, phaseId, newStart);
-    try { await db.collection("zakazky").doc(z._docId).update({ phases: newPhases }); }
-    catch(e) { console.error(e); }
+    try {
+      await db.collection("zakazky").doc(z._docId).update({ phases: newPhases });
+    } catch(e) { console.error(e); }
   }, [zakazky]);
 
   if (zakazky === null) return (
@@ -900,7 +900,7 @@ function FirebaseApp() {
   return <App zakazkyOverride={zakazky} onUpsert={upsertZakazka} onDelete={deleteZakazka} onUpdatePhase={updatePhase} syncing={syncing} />;
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(FirebaseApp));
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(FirebaseApp));
 
 </script>
 </body>
