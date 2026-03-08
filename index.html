@@ -601,7 +601,7 @@ function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, 
 
   const totalH = zakazky.length * ROW_H;
   const totalW = LABEL_W + totalDays * dayPx;
-  const sectionHdrH = showDays ? 40 : 32;
+  const sectionHdrH = 40; // vždy 40px – horní řada 18px + dolní 22px
   const dividerH = 4;
   const svgH = 2 * sectionHdrH + 2 * totalH + dividerH;
 
@@ -761,18 +761,56 @@ function GanttTimeHeader({ days, weeks, showDays, dayPx, todayStr }) {
     );
   }
 
-  // Week view (zoomed out)
+  // Week view (zoomed out) – dvouřádkový header stejně jako day view
+  // Horní řada: měsíce, dolní řada: týdny
+  const monthGroups = [];
+  let curMonth = null;
+  weeks.forEach((w, i) => {
+    const mo = w.getMonth();
+    const yr = w.getFullYear();
+    const key = `${yr}-${mo}`;
+    if (!curMonth || curMonth.key !== key) {
+      curMonth = { key, label: w.toLocaleDateString("cs-CZ",{month:"short", year:"numeric"}), count: 0 };
+      monthGroups.push(curMonth);
+    }
+    curMonth.count++;
+  });
+  const wPx = 7 * dayPx;
+
   return (
-    <div className="gantt-weeks-hdr">
-      {weeks.map((w, i) => {
-        const isToday = toISO(w) <= todayStr && todayStr < toISO(addDays(w, 7));
-        return (
-          <div key={i} className={`gantt-week-hdr${isToday?" today-wk":""}`} style={{minWidth:7*dayPx,width:7*dayPx}}>
-            T{getISOWeek(w)}<br/>
-            <span style={{fontSize:8,opacity:0.6}}>{w.getDate()}.{w.getMonth()+1}</span>
+    <div className="gantt-weeks-hdr" style={{flexDirection:"column",flex:1}}>
+      {/* Horní řada: měsíce – výška 18px */}
+      <div style={{display:"flex",borderBottom:"1px solid var(--border2)",height:18,overflow:"hidden"}}>
+        {monthGroups.map((g,i) => (
+          <div key={i} style={{minWidth:g.count*wPx,width:g.count*wPx,padding:"2px 4px",fontSize:10,fontFamily:"'JetBrains Mono',monospace",color:"var(--muted)",borderRight:"1px solid var(--border)",overflow:"hidden",whiteSpace:"nowrap"}}>
+            {g.label}
           </div>
-        );
-      })}
+        ))}
+      </div>
+      {/* Dolní řada: týdny – výška 22px */}
+      <div style={{display:"flex",height:22,overflow:"hidden"}}>
+        {weeks.map((w, i) => {
+          const isToday = toISO(w) <= todayStr && todayStr < toISO(addDays(w, 7));
+          return (
+            <div key={i} style={{
+              minWidth:wPx, width:wPx,
+              padding:"2px 2px",
+              textAlign:"center",
+              fontSize:10,
+              fontFamily:"'JetBrains Mono',monospace",
+              fontWeight: isToday ? 700 : 400,
+              color: isToday ? "#111" : "var(--muted)",
+              background: isToday ? "var(--kst)" : "transparent",
+              borderRight:"1px solid var(--border)",
+              lineHeight:1.2,
+              overflow:"hidden",
+              whiteSpace:"nowrap",
+            }}>
+              T{getISOWeek(w)} <span style={{fontSize:9,opacity:0.6}}>{w.getDate()}.{w.getMonth()+1}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
