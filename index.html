@@ -601,7 +601,7 @@ function GanttView({ zakazky, zoomIdx, setZoomIdx, startOffset, setStartOffset, 
 
   const totalH = zakazky.length * ROW_H;
   const totalW = LABEL_W + totalDays * dayPx;
-  const sectionHdrH = showDays ? Math.max(36, ROW_H * 0.7) : Math.max(26, ROW_H * 0.5);
+  const sectionHdrH = showDays ? 40 : 32;
   const dividerH = 4;
   const svgH = 2 * sectionHdrH + 2 * totalH + dividerH;
 
@@ -718,35 +718,41 @@ function GanttTimeHeader({ days, weeks, showDays, dayPx, todayStr }) {
 
     return (
       <div className="gantt-weeks-hdr" style={{flexDirection:"column",flex:1}}>
-        {/* Top row: week + month */}
-        <div style={{display:"flex",borderBottom:"1px solid var(--border2)"}}>
+        {/* Top row: week + month – pevná výška 18px */}
+        <div style={{display:"flex",borderBottom:"1px solid var(--border2)",height:18,overflow:"hidden"}}>
           {weekGroups.map((g,i) => (
-            <div key={i} style={{minWidth:g.count*dayPx,width:g.count*dayPx,padding:"3px 5px",fontSize:9,fontFamily:"IBM Plex Mono,monospace",color:"var(--muted)",borderRight:"1px solid var(--border)",overflow:"hidden",whiteSpace:"nowrap",letterSpacing:"0.5px"}}>
+            <div key={i} style={{minWidth:g.count*dayPx,width:g.count*dayPx,padding:"2px 4px",fontSize:10,fontFamily:"'JetBrains Mono',monospace",color:"var(--muted)",borderRight:"1px solid var(--border)",overflow:"hidden",whiteSpace:"nowrap"}}>
               {g.label}
             </div>
           ))}
         </div>
-        {/* Bottom row: individual days */}
-        <div style={{display:"flex"}}>
+        {/* Bottom row: individual days – pevná výška 22px */}
+        <div style={{display:"flex",height:22,overflow:"hidden"}}>
           {days.map((d, i) => {
             const dStr = toISO(d);
             const isToday = dStr === todayStr;
             const isWeekend = d.getDay() === 0 || d.getDay() === 6;
             const dayName = DAY_NAMES[d.getDay()];
+            // Co zobrazit podle šířky sloupce
+            let label;
+            if (dayPx >= 28) label = <>{dayName}<br/><span style={{fontSize:9,opacity:0.7}}>{d.getDate()}</span></>;
+            else if (dayPx >= 18) label = <>{dayName[0]}<br/><span style={{fontSize:9,opacity:0.7}}>{d.getDate()}</span></>;
+            else label = <span style={{fontSize:9}}>{d.getDate()}</span>;
             return (
               <div key={i} style={{
                 minWidth:dayPx, width:dayPx,
-                padding:"3px 2px",
+                padding:"1px 1px",
                 textAlign:"center",
-                fontSize:9,
-                fontFamily:"IBM Plex Mono,monospace",
-                color: isToday ? "var(--kst)" : isWeekend ? "var(--muted2)" : "var(--muted)",
-                background: isToday ? "rgba(240,192,64,0.1)" : isWeekend ? "rgba(255,255,255,0.015)" : "transparent",
+                fontSize:10,
+                fontFamily:"'JetBrains Mono',monospace",
+                fontWeight: isToday ? 700 : 400,
+                color: isToday ? "#111" : isWeekend ? "var(--muted2)" : "var(--muted)",
+                background: isToday ? "var(--kst)" : isWeekend ? "rgba(255,255,255,0.015)" : "transparent",
                 borderRight:"1px solid var(--border)",
-                lineHeight:1.3,
+                lineHeight:1.2,
                 overflow:"hidden",
               }}>
-                {dayPx >= 20 ? <>{dayName}<br/><span style={{fontSize:8,opacity:0.7}}>{d.getDate()}</span></> : d.getDate()}
+                {label}
               </div>
             );
           })}
