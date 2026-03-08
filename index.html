@@ -849,15 +849,35 @@ function ZakazkaModal({ zakazka, onSave, onDelete, onClose }) {
 
 
 function FirebaseApp() {
-  const [zakazky, setZakazky] = React.useState(null);
+  // fbZakazky = surová data z Firebase (source of truth pro ostatní uživatele)
+  // localOverride = mapa { docId: phases } pro okamžitou vizuální odezvu při dragu
+  const [fbZakazky, setFbZakazky] = React.useState(null);
+  const [localOverride, setLocalOverride] = React.useState({});
   const [syncing, setSyncing] = React.useState(false);
 
   useEffect(() => {
     const unsub = db.collection("zakazky").orderBy("createdAt", "asc").onSnapshot(snapshot => {
-      setZakazky(snapshot.docs.map(doc => ({ ...doc.data(), _docId: doc.id })));
-    }, err => { console.error("Firebase:", err); setZakazky([]); });
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), _docId: doc.id }));
+      setFbZakazky(data);
+      // Po příchodu snapshotu vymaž override pro ty záznamy které přišly
+      setLocalOverride(prev => {
+        const next = { ...prev };
+        snapshot.docs.forEach(doc => { delete next[doc.id]; });
+        return next;
+      });
+    }, err => { console.error("Firebase:", err); setFbZakazky([]); });
     return () => unsub();
   }, []);
+
+  // Spoj Firebase data s lokálními override
+  const zakazky = React.useMemo(() => {
+    if (!fbZakazky) return null;
+    return fbZakazky.map(z =>
+      localOverride[z._docId]
+        ? { ...z, phases: localOverride[z._docId] }
+        : z
+    );
+  }, [fbZakazky, localOverride]);
 
   const upsertZakazka = async (z) => {
     setSyncing(true);
@@ -878,25 +898,17 @@ function FirebaseApp() {
     setSyncing(false);
   };
 
-  // OPTIMISTICKÝ UPDATE – okamžitě aktualizuj lokální stav, Firebase sync na pozadí
-  // Díky tomu není vidět trhavý pohyb při puštění myši
   const updatePhase = React.useCallback((zakazkaId, phaseId, newStart) => {
-    // 1. Okamžitě aktualizuj lokální stav → žádný vizuální skok
-    setZakazky(prev => prev.map(z => {
-      if (z.id !== zakazkaId) return z;
-      return { ...z, phases: computeCascade(z.phases, phaseId, newStart) };
-    }));
-    // 2. Sync do Firebase na pozadí (bez await)
-    setZakazky(prev => {
-      const z = prev.find(x => x.id === zakazkaId);
-      if (z?._docId) {
-        const newPhases = computeCascade(z.phases, phaseId, newStart);
-        db.collection("zakazky").doc(z._docId).update({ phases: newPhases })
-          .catch(e => console.error("Firebase sync:", e));
-      }
-      return prev; // stav se nemění, jen spouštíme async zápis
-    });
-  }, []);
+    if (!fbZakazky) return;
+    const z = fbZakazky.find(x => x.id === zakazkaId);
+    if (!z?._docId) return;
+    const newPhases = computeCascade(z.phases, phaseId, newStart);
+    // 1. Okamžitý lokální override → žádný trhavý pohyb
+    setLocalOverride(prev => ({ ...prev, [z._docId]: newPhases }));
+    // 2. Zápis do Firebase na pozadí
+    db.collection("zakazky").doc(z._docId).update({ phases: newPhases })
+      .catch(e => console.error("Firebase sync:", e));
+  }, [fbZakazky]);
 
   if (zakazky === null) return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0e0f11",color:"#f0c040",fontFamily:"IBM Plex Mono,monospace",flexDirection:"column",gap:12}}>
